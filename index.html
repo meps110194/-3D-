@@ -1,0 +1,1833 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>3D P2P 雙人街頭足球對戰 | WebRTC IP 直連版</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Three.js r128 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- Tone.js 音效合成引擎 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&family=Noto+Sans+TC:wght@400;700;900&display=swap" rel="stylesheet">
+    <style>
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #060b14;
+            font-family: 'Inter', 'Noto Sans TC', sans-serif;
+            touch-action: none;
+        }
+        #game-canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        /* 自訂捲軸 */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(15, 23, 42, 0.6);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(16, 185, 129, 0.6);
+            border-radius: 9999px;
+        }
+        /* 射門蓄力條漸層 */
+        .shot-power-gradient {
+            background: linear-gradient(90deg, #38bdf8 0%, #22c55e 45%, #eab308 75%, #ef4444 100%);
+        }
+        /* 進球慶祝橫幅動畫 */
+        @keyframes goalPop {
+            0% { transform: translate(-50%, -50%) scale(0.4); opacity: 0; }
+            18% { transform: translate(-50%, -50%) scale(1.15); opacity: 1; }
+            82% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+            100% { transform: translate(-50%, -68%) scale(0.95); opacity: 0; }
+        }
+        .goal-banner-anim {
+            animation: goalPop 2.0s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+        }
+    </style>
+</head>
+<body class="text-white">
+
+    <!-- 3D 足球場渲染畫布 -->
+    <canvas id="game-canvas"></canvas>
+
+    <!-- 頂部記分板與 P2P 狀態 HUD -->
+    <div class="fixed top-0 left-0 right-0 z-20 pointer-events-none p-2 sm:p-4 flex flex-col items-center gap-2">
+        <div class="w-full max-w-4xl flex items-center justify-between gap-2 pointer-events-auto">
+            
+            <!-- 左側：P2P IP 連線大廳與系統架構按鈕 -->
+            <div class="flex items-center gap-1.5 sm:gap-2">
+                <button id="btn-open-lobby" class="flex items-center gap-1.5 bg-slate-900/85 hover:bg-slate-800 border border-slate-700/80 backdrop-blur-md px-3 py-2 rounded-xl text-xs sm:text-sm font-bold shadow-lg transition active:scale-95">
+                    <span id="conn-dot" class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse"></span>
+                    <span id="conn-status-label">單機 AI 對戰</span>
+                </button>
+                <button id="btn-open-arch" class="bg-slate-900/85 hover:bg-slate-800 border border-slate-700/80 backdrop-blur-md px-2.5 py-2 rounded-xl text-xs sm:text-sm font-semibold text-slate-300 shadow-lg transition active:scale-95" title="查看 3D 足球 P2P 架構規劃">
+                    📐 架構規劃
+                </button>
+            </div>
+
+            <!-- 中央：記分板與比賽時間 -->
+            <div class="flex items-center bg-slate-950/90 border border-slate-700/90 backdrop-blur-md rounded-2xl px-3 sm:px-6 py-1.5 sm:py-2 shadow-2xl gap-3 sm:gap-6">
+                <!-- P1 紅隊 -->
+                <div class="flex items-center gap-2">
+                    <div class="text-right">
+                        <div class="text-[10px] sm:text-xs font-bold text-rose-400 uppercase tracking-wider">P1 紅隊</div>
+                        <div class="text-xl sm:text-3xl font-black leading-none text-white" id="score-p1">0</div>
+                    </div>
+                    <div class="w-3 h-8 rounded-full bg-gradient-to-b from-rose-500 to-red-600"></div>
+                </div>
+
+                <!-- 比賽計時器 -->
+                <div class="flex flex-col items-center px-2.5 border-x border-slate-800">
+                    <div class="text-[10px] font-bold text-emerald-400 tracking-widest">MATCH</div>
+                    <div class="text-sm sm:text-lg font-black tracking-widest text-slate-100" id="game-clock">03:00</div>
+                </div>
+
+                <!-- P2 藍隊 -->
+                <div class="flex items-center gap-2">
+                    <div class="w-3 h-8 rounded-full bg-gradient-to-b from-cyan-400 to-blue-600"></div>
+                    <div class="text-left">
+                        <div class="text-[10px] sm:text-xs font-bold text-cyan-400 uppercase tracking-wider">P2 藍隊</div>
+                        <div class="text-xl sm:text-3xl font-black leading-none text-white" id="score-p2">0</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 右側：視角切換與音效控制 -->
+            <div class="flex items-center gap-1.5 sm:gap-2">
+                <button id="btn-toggle-cam" class="bg-slate-900/85 hover:bg-slate-800 border border-slate-700/80 backdrop-blur-md px-2.5 py-2 rounded-xl text-xs font-bold text-slate-200 shadow-lg transition active:scale-95" title="切換轉播側視角 / 追尾視角">
+                    🎥 轉播視角
+                </button>
+                <button id="btn-toggle-audio" class="bg-slate-900/85 hover:bg-slate-800 border border-slate-700/80 backdrop-blur-md p-2 rounded-xl text-xs sm:text-sm font-bold text-slate-200 shadow-lg transition active:scale-95" title="開啟/靜音音效">
+                    🔊
+                </button>
+            </div>
+        </div>
+
+        <!-- P2P 連線遙測列 (顯示對方 IP 與即時 Ping 延遲) -->
+        <div id="p2p-telemetry-bar" class="hidden bg-emerald-950/85 border border-emerald-500/40 backdrop-blur-md px-3.5 py-1 rounded-full text-[11px] font-semibold text-emerald-300 flex items-center gap-3 shadow-md">
+            <span>🔗 P2P UDP 直連中</span>
+            <span id="peer-ip-badge">對方 IP: 偵測中...</span>
+            <span id="ping-badge">Ping: -- ms</span>
+        </div>
+    </div>
+
+    <!-- 中央進球/開球事件橫幅 -->
+    <div id="event-banner" class="hidden fixed top-1/3 left-1/2 z-30 pointer-events-none text-center">
+        <div id="event-banner-text" class="text-4xl sm:text-6xl font-black italic tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-emerald-300 via-teal-200 to-cyan-400 drop-shadow-[0_4px_20px_rgba(0,0,0,0.95)]">
+            GOAL!!
+        </div>
+        <div id="event-banner-sub" class="text-xs sm:text-sm font-bold text-white mt-1.5 bg-slate-950/75 border border-white/15 px-4 py-1 rounded-full inline-block">
+            P1 紅隊破門得分！
+        </div>
+    </div>
+
+    <!-- 射門蓄力能量條 (長按射門鍵時顯示) -->
+    <div id="shot-meter-container" class="hidden fixed bottom-28 sm:bottom-24 left-1/2 -translate-x-1/2 z-20 pointer-events-none flex flex-col items-center">
+        <div class="text-xs font-black tracking-wider text-white drop-shadow mb-1 bg-slate-900/85 px-3 py-0.5 rounded-full border border-white/20">
+            射門力道蓄力中 — 放開起腳！
+        </div>
+        <div class="w-52 sm:w-64 h-4 bg-slate-900/90 rounded-full p-0.5 border border-slate-600 shadow-xl relative overflow-hidden">
+            <div id="shot-meter-fill" class="h-full rounded-full shot-power-gradient transition-none" style="width: 0%;"></div>
+        </div>
+    </div>
+
+    <!-- 桌面端操作說明膠囊 -->
+    <div class="hidden md:flex fixed bottom-4 left-1/2 -translate-x-1/2 z-10 pointer-events-none bg-slate-900/80 border border-slate-700/60 backdrop-blur-md px-4 py-2 rounded-2xl text-xs text-slate-300 items-center gap-4 shadow-lg">
+        <span><kbd class="bg-slate-800 px-1.5 py-0.5 rounded text-emerald-400 font-bold">W A S D</kbd> / 方向鍵盤帶移動</span>
+        <span><kbd class="bg-slate-800 px-1.5 py-0.5 rounded text-amber-400 font-bold">Shift</kbd> 衝刺加速</span>
+        <span><kbd class="bg-slate-800 px-1.5 py-0.5 rounded text-rose-400 font-bold">空白鍵 Space</kbd> 持球長按射門 / 無球滑鏟搶斷</span>
+        <span><kbd class="bg-slate-800 px-1.5 py-0.5 rounded text-cyan-400 font-bold">滑鼠拖曳</kbd> 自由旋轉球場視角</span>
+    </div>
+
+    <!-- 行動端觸控虛擬搖桿與動作按鈕 -->
+    <div class="md:hidden fixed bottom-4 left-4 right-4 z-20 flex items-end justify-between pointer-events-none">
+        <!-- 左下虛擬搖桿 -->
+        <div id="joystick-zone" class="w-28 h-28 rounded-full bg-slate-900/55 border-2 border-white/20 backdrop-blur-sm relative pointer-events-auto flex items-center justify-center">
+            <div id="joystick-knob" class="w-11 h-11 rounded-full bg-gradient-to-tr from-emerald-500 to-teal-300 shadow-lg border-2 border-white/80 pointer-events-none"></div>
+        </div>
+
+        <!-- 右下衝刺與射門/滑鏟按鍵 -->
+        <div class="flex flex-col items-end gap-2.5 pointer-events-auto">
+            <button id="btn-touch-sprint" class="px-4 py-2 rounded-full bg-slate-800/85 border border-slate-600 text-xs font-bold text-amber-300 active:bg-amber-400 active:text-slate-950 shadow-lg">
+                ⚡ 衝刺加速
+            </button>
+            <button id="btn-touch-action" class="w-20 h-20 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 border-2 border-white/70 text-sm font-black text-white shadow-[0_0_20px_rgba(16,185,129,0.5)] active:scale-95 flex flex-col items-center justify-center">
+                <span id="touch-action-label">射門</span>
+                <span class="text-[10px] font-normal opacity-85">長按蓄力</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Toast 訊息提示框 (取代 alert) -->
+    <div id="toast-box" class="fixed top-20 left-1/2 -translate-x-1/2 z-50 pointer-events-none transition-all duration-300 opacity-0 -translate-y-2">
+        <div id="toast-msg" class="bg-slate-800/95 border border-emerald-500/60 text-white text-xs sm:text-sm font-bold px-4 py-2.5 rounded-xl shadow-2xl backdrop-blur-md">
+            提示訊息
+        </div>
+    </div>
+
+    <!-- P2P IP 連線大廳 Modal -->
+    <div id="lobby-modal" class="fixed inset-0 z-40 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-6">
+        <div class="bg-slate-900 border border-slate-700/90 rounded-3xl w-full max-w-2xl max-h-[92vh] overflow-y-auto shadow-2xl p-5 sm:p-7 relative">
+            
+            <!-- 標題列 -->
+            <div class="flex items-start justify-between gap-4 mb-5">
+                <div>
+                    <div class="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-xs font-bold mb-2">
+                        ⚽ WebRTC Serverless IP Direct P2P
+                    </div>
+                    <h1 class="text-2xl sm:text-3xl font-black tracking-tight text-white">3D 雙人街頭足球對戰</h1>
+                    <p class="text-xs sm:text-sm text-slate-400 mt-1">純靜態前端網頁，零後端伺服器，直接透過本機區域 IP 或 STUN 公網 IP 建立 P2P 對戰</p>
+                </div>
+                <button id="btn-close-lobby" class="w-9 h-9 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center justify-center font-bold transition">
+                    ✕
+                </button>
+            </div>
+
+            <!-- 本機 IP 探測卡片 -->
+            <div class="bg-slate-950/80 border border-slate-800 rounded-2xl p-3.5 mb-5 flex flex-wrap items-center justify-between gap-2">
+                <div class="flex items-center gap-2.5">
+                    <span class="text-lg">🌐</span>
+                    <div>
+                        <div class="text-[11px] text-slate-400 font-semibold">本機 WebRTC 探測 IP 位址 (ICE Candidates)</div>
+                        <div id="local-ip-display" class="text-xs sm:text-sm font-mono font-bold text-emerald-400">正在探測本機區域網路 / STUN 公網 IP...</div>
+                    </div>
+                </div>
+                <button id="btn-refresh-ip" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-2.5 py-1.5 rounded-lg font-semibold transition">
+                    重新探測
+                </button>
+            </div>
+
+            <!-- 模式切換分頁 -->
+            <div class="grid grid-cols-3 gap-2 bg-slate-950 p-1.5 rounded-2xl border border-slate-800 mb-5">
+                <button data-tab="solo" class="tab-btn bg-emerald-600 text-white py-2.5 px-2 rounded-xl text-xs sm:text-sm font-bold transition">
+                    🤖 單機 AI 對戰
+                </button>
+                <button data-tab="host" class="tab-btn text-slate-400 hover:text-white py-2.5 px-2 rounded-xl text-xs sm:text-sm font-bold transition">
+                    🏠 建立房間 (P1)
+                </button>
+                <button data-tab="join" class="tab-btn text-slate-400 hover:text-white py-2.5 px-2 rounded-xl text-xs sm:text-sm font-bold transition">
+                    🔗 加入房間 (P2)
+                </button>
+            </div>
+
+            <!-- 分頁 1: 單機 AI 對戰 -->
+            <div id="tab-solo" class="tab-content space-y-4">
+                <div class="bg-slate-800/50 border border-slate-700/60 rounded-2xl p-4 text-xs sm:text-sm text-slate-300 space-y-2">
+                    <p class="font-bold text-white">3D 籠式街頭足球玩法說明：</p>
+                    <ul class="list-disc list-inside space-y-1 text-slate-300">
+                        <li><span class="text-rose-400 font-bold">P1 紅隊</span> 進攻上方北側球門，防守下方南側球門。</li>
+                        <li>靠近足球自動進入<strong>盤帶狀態</strong>；按住 <span class="text-emerald-400 font-bold">空白鍵</span> 蓄力可踢出強力抽射或高弧度挑射！</li>
+                        <li>無球防守時按下 <span class="text-cyan-400 font-bold">空白鍵</span> 可發動<strong>高速滑鏟搶斷</strong>。</li>
+                    </ul>
+                </div>
+                <div class="flex flex-col sm:flex-row gap-3">
+                    <button id="btn-start-solo" class="flex-1 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-black py-3.5 px-6 rounded-2xl shadow-lg shadow-emerald-600/25 transition active:scale-98">
+                        開始 1v1 單機足球賽
+                    </button>
+                    <button id="btn-reset-match" class="bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold py-3.5 px-5 rounded-2xl border border-slate-700 transition">
+                        重置比分與時間
+                    </button>
+                </div>
+            </div>
+
+            <!-- 分頁 2: 建立房間 (Host / P1) -->
+            <div id="tab-host" class="tab-content hidden space-y-4">
+                <div class="space-y-2">
+                    <div class="flex items-center justify-between">
+                        <span class="text-xs font-bold text-emerald-400">步驟 1：產生封裝您 IP 位址的 P2P 邀請碼</span>
+                        <button id="btn-create-offer" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3.5 py-1.5 rounded-xl transition">
+                            產生邀請碼
+                        </button>
+                    </div>
+                    <div class="relative">
+                        <textarea id="host-offer-output" readonly rows="3" placeholder="點擊上方「產生邀請碼」，系統將自動封裝您的 IP 與 WebRTC SDP 連線資訊..." class="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-[11px] font-mono text-emerald-300 focus:outline-none"></textarea>
+                        <button id="btn-copy-offer" class="absolute bottom-2.5 right-2.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold px-3 py-1 rounded-lg border border-slate-600 transition">
+                            📋 複製邀請碼
+                        </button>
+                    </div>
+                </div>
+
+                <div class="space-y-2">
+                    <span class="text-xs font-bold text-cyan-400">步驟 2：貼上 P2 好友回傳的「連線回應碼」完成握手</span>
+                    <textarea id="host-answer-input" rows="3" placeholder="請將 P2 好友傳回給您的回應碼貼在此處..." class="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-[11px] font-mono text-white focus:border-cyan-500 focus:outline-none"></textarea>
+                    <button id="btn-accept-answer" class="w-full bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 font-black py-3 rounded-xl shadow-lg transition">
+                        ⚡ 建立 IP 點對點連線並開賽
+                    </button>
+                </div>
+            </div>
+
+            <!-- 分頁 3: 加入房間 (Guest / P2) -->
+            <div id="tab-join" class="tab-content hidden space-y-4">
+                <div class="space-y-2">
+                    <span class="text-xs font-bold text-emerald-400">步驟 1：貼上房主 (P1) 的「P2P 邀請碼」</span>
+                    <textarea id="guest-offer-input" rows="3" placeholder="請貼上房主傳給您的邀請碼..." class="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-[11px] font-mono text-white focus:border-emerald-500 focus:outline-none"></textarea>
+                    <button id="btn-create-answer" class="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-black py-2.5 rounded-xl shadow-lg transition">
+                        解析房主 IP 並產生我的回應碼
+                    </button>
+                </div>
+
+                <div class="space-y-2">
+                    <div class="flex items-center justify-between">
+                        <span class="text-xs font-bold text-cyan-400">步驟 2：複製下方「連線回應碼」傳回給房主</span>
+                        <span id="parsed-host-ip" class="text-[11px] font-mono text-emerald-400"></span>
+                    </div>
+                    <div class="relative">
+                        <textarea id="guest-answer-output" readonly rows="3" placeholder="解析成功後，此處會自動產生回應碼，請複製傳給房主..." class="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-[11px] font-mono text-cyan-300 focus:outline-none"></textarea>
+                        <button id="btn-copy-answer" class="absolute bottom-2.5 right-2.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold px-3 py-1 rounded-lg border border-slate-600 transition">
+                            📋 複製回應碼
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 系統架構規劃說明 Modal -->
+    <div id="arch-modal" class="hidden fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-6">
+        <div class="bg-slate-900 border border-slate-700 rounded-3xl w-full max-w-2xl max-h-[88vh] overflow-y-auto p-6 shadow-2xl space-y-4">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+                <h2 class="text-xl font-black text-white">📐 雙人 3D 足球靜態 P2P 網頁架構規劃</h2>
+                <button id="btn-close-arch" class="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold">✕</button>
+            </div>
+            <div class="space-y-3 text-xs sm:text-sm text-slate-300 leading-relaxed">
+                <div class="bg-slate-950 p-4 rounded-2xl border border-slate-800">
+                    <h3 class="font-bold text-emerald-400 mb-1">1. 無伺服器 IP 直連架構 (Serverless WebRTC IP P2P)</h3>
+                    <p>純靜態 HTML 網頁不依賴任何後端 WebSocket 伺服器。透過瀏覽器內建的 <code class="text-emerald-300">RTCPeerConnection</code> 與 Google STUN 節點進行 ICE 候選位址蒐集，自動擷取裝置的<strong>區域網路 IP (LAN Host IP)</strong> 與 <strong>公網 NAT 映射 IP (Reflexive IP)</strong>，壓縮編碼為交換權杖，完成後即建立低延遲 UDP 點對點通道。</p>
+                </div>
+                <div class="bg-slate-950 p-4 rounded-2xl border border-slate-800">
+                    <h3 class="font-bold text-cyan-400 mb-1">2. 物理權威同步與預測插值 (Host-Authoritative Sync)</h3>
+                    <p><strong>房主 (P1 Host)</strong> 以 60Hz 運算足球滾動摩擦、空氣阻力、門柱圓柱體碰撞、滑鏟衝量與進球越線判定，並透過不可靠通道（<code class="text-cyan-300">ordered: false, maxRetransmits: 0</code>）以 30Hz 廣播快照；<strong>客端 (P2 Guest)</strong> 傳送操作向量並對座標進行線性插值（LERP），避免網路延遲造成的瞬移感。</p>
+                </div>
+                <div class="bg-slate-950 p-4 rounded-2xl border border-slate-800">
+                    <h3 class="font-bold text-amber-400 mb-1">3. 零外部素材依賴 (100% Procedural Assets)</h3>
+                    <p>球場草皮雙色條紋、白線禁區與經典黑白五邊形足球貼圖皆透過 Offscreen HTML5 Canvas 動態繪製生成；踢球低頻悶響、擊中門柱金屬聲與裁判哨音則由 Tone.js 即時合成，單一檔案即可離線或部署於任何靜態託管平台（如 GitHub Pages）。</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        /**
+         * ============================================================================
+         * 1. 全域球場規格與比賽狀態常數 (PITCH & GAME CONFIG)
+         * ============================================================================
+         */
+        const PITCH = {
+            WIDTH: 16.0,          // 球場寬度 (X: -8 ~ +8 公尺)
+            LENGTH: 26.0,         // 球場長度 (Z: -13 ~ +13 公尺)
+            GOAL_WIDTH: 4.2,      // 球門寬度 (X: -2.1 ~ +2.1 公尺)
+            GOAL_HEIGHT: 2.1,     // 球門高度 (Y: 0 ~ 2.1 公尺)
+            GOAL_DEPTH: 1.5,      // 球門網深度
+            POST_RADIUS: 0.065,   // 門柱與橫樑半徑
+            BALL_RADIUS: 0.22,    // 足球半徑 (略放大提升 3D 視覺辨識度)
+            GRAVITY: -14.5,       // 重力加速度
+            GRASS_FRICTION: 0.985 // 草地滾動阻力
+        };
+
+        const GAME_STATE = {
+            mode: 'SOLO',         // 'SOLO' | 'HOST' | 'GUEST'
+            isConnected: false,
+            scores: { p1: 0, p2: 0 },
+            gameTime: 180,        // 3 分鐘比賽
+            ballOwner: null,      // 'p1' | 'p2' | null (自由球)
+            kickCooldown: 0,      // 出腳後短暫防自搶冷卻
+            resetTimer: 0,        // 進球後開球倒數緩衝
+            pendingKickoff: 'p2',
+            camMode: 'BROADCAST'  // 'BROADCAST' (轉播側視角) | 'FOLLOW' (追尾視角)
+        };
+
+        /**
+         * ============================================================================
+         * 2. 程序化音效合成引擎 (TONE.JS AUDIO ENGINE)
+         * ============================================================================
+         */
+        const AudioEngine = {
+            initialized: false,
+            muted: false,
+            kickSynth: null,
+            postSynth: null,
+            whistleSynth: null,
+
+            async init() {
+                if (this.initialized) return;
+                try {
+                    await Tone.start();
+                    // 踢球低頻悶響
+                    this.kickSynth = new Tone.MembraneSynth({
+                        pitchDecay: 0.05,
+                        octaves: 3.5,
+                        oscillator: { type: 'sine' },
+                        envelope: { attack: 0.002, decay: 0.18, sustain: 0, release: 0.06 }
+                    }).toDestination();
+                    this.kickSynth.volume.value = -5;
+
+                    // 擊中門柱/橫樑金屬聲
+                    this.postSynth = new Tone.MetalSynth({
+                        frequency: 290,
+                        envelope: { attack: 0.001, decay: 0.28, release: 0.08 },
+                        harmonicity: 4.5,
+                        modulationIndex: 14,
+                        resonance: 2600,
+                        octaves: 1.3
+                    }).toDestination();
+                    this.postSynth.volume.value = -8;
+
+                    // 裁判哨音與進球和弦
+                    this.whistleSynth = new Tone.PolySynth(Tone.Synth, {
+                        oscillator: { type: 'triangle' },
+                        envelope: { attack: 0.02, decay: 0.18, sustain: 0.2, release: 0.2 }
+                    }).toDestination();
+                    this.whistleSynth.volume.value = -9;
+
+                    this.initialized = true;
+                } catch (e) {
+                    console.warn('Audio init skipped:', e);
+                }
+            },
+
+            playKick(power = 0.7) {
+                if (!this.initialized || this.muted) return;
+                const vel = Math.min(1, Math.max(0.2, power));
+                this.kickSynth.triggerAttackRelease("C1", "16n", undefined, vel);
+            },
+
+            playPostHit() {
+                if (!this.initialized || this.muted) return;
+                this.postSynth.triggerAttackRelease("8n");
+            },
+
+            playGoalCheer() {
+                if (!this.initialized || this.muted) return;
+                this.whistleSynth.triggerAttackRelease(["C5", "E5", "G5", "C6"], "4n");
+            },
+
+            playWhistle() {
+                if (!this.initialized || this.muted) return;
+                this.whistleSynth.triggerAttackRelease(["B5", "C6"], "8n");
+            }
+        };
+
+        /**
+         * ============================================================================
+         * 3. 3D 足球場、球門、球員與紋理建構 (THREE.JS SCENE)
+         * ============================================================================
+         */
+        let scene, camera, renderer;
+        let ballMesh, p1Rig, p2Rig;
+        const clock = new THREE.Clock();
+
+        const ballState = {
+            pos: new THREE.Vector3(0, PITCH.BALL_RADIUS, 0),
+            vel: new THREE.Vector3(0, 0, 0),
+            targetPos: new THREE.Vector3(0, PITCH.BALL_RADIUS, 0)
+        };
+
+        const players = {
+            p1: {
+                pos: new THREE.Vector3(0, 0, 3.2),
+                vel: new THREE.Vector3(0, 0, 0),
+                rotY: Math.PI, // 面向北側 (-Z)
+                stamina: 100,
+                isCharging: false,
+                chargeVal: 0,
+                slideTimer: 0,
+                slideCooldown: 0,
+                kickAnimTimer: 0,
+                input: { x: 0, z: 0, sprint: false, actionDown: false, actionJustPressed: false }
+            },
+            p2: {
+                pos: new THREE.Vector3(0, 0, -3.2),
+                vel: new THREE.Vector3(0, 0, 0),
+                rotY: 0,       // 面向南側 (+Z)
+                stamina: 100,
+                isCharging: false,
+                chargeVal: 0,
+                slideTimer: 0,
+                slideCooldown: 0,
+                kickAnimTimer: 0,
+                targetPos: new THREE.Vector3(0, 0, -3.2),
+                input: { x: 0, z: 0, sprint: false, actionDown: false, actionJustPressed: false }
+            }
+        };
+
+        // 程序化生成雙色條紋草皮與標準足球場白線紋理
+        function createPitchTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 1024;
+            canvas.height = 1664;
+            const ctx = canvas.getContext('2d');
+
+            // 場外深綠緩衝草地
+            ctx.fillStyle = '#0f3d24';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            const padX = 76;
+            const padY = 82;
+            const fieldW = canvas.width - padX * 2;
+            const fieldH = canvas.height - padY * 2;
+
+            // 12 道割草機深淺綠條紋
+            const stripes = 12;
+            const stripeH = fieldH / stripes;
+            for (let i = 0; i < stripes; i++) {
+                ctx.fillStyle = i % 2 === 0 ? '#15803d' : '#166534';
+                ctx.fillRect(padX, padY + i * stripeH, fieldW, stripeH);
+            }
+
+            // 草皮微顆粒質感
+            ctx.fillStyle = 'rgba(255,255,255,0.03)';
+            for (let i = 0; i < 4000; i++) {
+                ctx.fillRect(padX + Math.random() * fieldW, padY + Math.random() * fieldH, 2, 2);
+            }
+
+            // 白色球場標線
+            ctx.strokeStyle = 'rgba(248, 250, 252, 0.92)';
+            ctx.lineWidth = 7;
+
+            // 邊線與底線
+            ctx.strokeRect(padX, padY, fieldW, fieldH);
+
+            // 中線與中圈
+            const midY = padY + fieldH / 2;
+            ctx.beginPath();
+            ctx.moveTo(padX, midY);
+            ctx.lineTo(padX + fieldW, midY);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.arc(canvas.width / 2, midY, 125, 0, Math.PI * 2);
+            ctx.stroke();
+
+            // 開球點
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.arc(canvas.width / 2, midY, 10, 0, Math.PI * 2);
+            ctx.fill();
+
+            // 上下大禁區 (Penalty Box) 與小禁區
+            const penW = fieldW * 0.56;
+            const penH = fieldH * 0.16;
+            const goalAreaW = fieldW * 0.32;
+            const goalAreaH = fieldH * 0.065;
+
+            // 北側禁區 (上方)
+            ctx.strokeRect((canvas.width - penW) / 2, padY, penW, penH);
+            ctx.strokeRect((canvas.width - goalAreaW) / 2, padY, goalAreaW, goalAreaH);
+
+            // 南側禁區 (下方)
+            ctx.strokeRect((canvas.width - penW) / 2, padY + fieldH - penH, penW, penH);
+            ctx.strokeRect((canvas.width - goalAreaW) / 2, padY + fieldH - goalAreaH, goalAreaW, goalAreaH);
+
+            const tex = new THREE.CanvasTexture(canvas);
+            tex.anisotropy = 8;
+            return tex;
+        }
+
+        // 程序化生成經典黑白足球紋理
+        function createSoccerBallTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 512;
+            canvas.height = 256;
+            const ctx = canvas.getContext('2d');
+
+            ctx.fillStyle = '#f8fafc';
+            ctx.fillRect(0, 0, 512, 256);
+
+            // 繪製黑色五邊形區塊與接縫
+            ctx.fillStyle = '#0f172a';
+            ctx.strokeStyle = '#334155';
+            ctx.lineWidth = 3;
+
+            const centers = [
+                [64, 64], [192, 64], [320, 64], [448, 64],
+                [128, 128], [256, 128], [384, 128], [0, 128], [512, 128],
+                [64, 192], [192, 192], [320, 192], [448, 192]
+            ];
+
+            centers.forEach(([cx, cy]) => {
+                ctx.beginPath();
+                const r = 24;
+                for (let i = 0; i < 5; i++) {
+                    const ang = (i * 2 * Math.PI) / 5 - Math.PI / 2;
+                    const px = cx + Math.cos(ang) * r;
+                    const py = cy + Math.sin(ang) * r;
+                    if (i === 0) ctx.moveTo(px, py);
+                    else ctx.lineTo(px, py);
+                }
+                ctx.closePath();
+                ctx.fill();
+                ctx.stroke();
+            });
+
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        // 建立 3D 球門 (門柱、橫樑與球網)
+        function createGoalStructure(zPos, facingSign) {
+            const goalGroup = new THREE.Group();
+            const postMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, metalness: 0.4, roughness: 0.25 });
+
+            const halfW = PITCH.GOAL_WIDTH / 2;
+            const h = PITCH.GOAL_HEIGHT;
+            const depth = PITCH.GOAL_DEPTH * facingSign;
+
+            // 左門柱
+            const leftPost = new THREE.Mesh(new THREE.CylinderGeometry(PITCH.POST_RADIUS, PITCH.POST_RADIUS, h, 16), postMat);
+            leftPost.position.set(-halfW, h / 2, zPos);
+            leftPost.castShadow = true;
+            goalGroup.add(leftPost);
+
+            // 右門柱
+            const rightPost = new THREE.Mesh(new THREE.CylinderGeometry(PITCH.POST_RADIUS, PITCH.POST_RADIUS, h, 16), postMat);
+            rightPost.position.set(halfW, h / 2, zPos);
+            rightPost.castShadow = true;
+            goalGroup.add(rightPost);
+
+            // 橫樑
+            const crossbar = new THREE.Mesh(new THREE.CylinderGeometry(PITCH.POST_RADIUS, PITCH.POST_RADIUS, PITCH.GOAL_WIDTH + PITCH.POST_RADIUS * 2, 16), postMat);
+            crossbar.rotation.z = Math.PI / 2;
+            crossbar.position.set(0, h, zPos);
+            crossbar.castShadow = true;
+            goalGroup.add(crossbar);
+
+            // 球網線框 (後網 + 兩側網 + 頂網)
+            const netMat = new THREE.MeshBasicMaterial({ color: 0xe2e8f0, wireframe: true, transparent: true, opacity: 0.55 });
+            const backNet = new THREE.Mesh(new THREE.PlaneGeometry(PITCH.GOAL_WIDTH, h, 14, 7), netMat);
+            backNet.position.set(0, h / 2, zPos + depth);
+            goalGroup.add(backNet);
+
+            const topNet = new THREE.Mesh(new THREE.PlaneGeometry(PITCH.GOAL_WIDTH, PITCH.GOAL_DEPTH, 14, 5), netMat);
+            topNet.rotation.x = Math.PI / 2;
+            topNet.position.set(0, h, zPos + depth / 2);
+            goalGroup.add(topNet);
+
+            const sideNetGeo = new THREE.PlaneGeometry(PITCH.GOAL_DEPTH, h, 5, 7);
+            const leftNet = new THREE.Mesh(sideNetGeo, netMat);
+            leftNet.rotation.y = Math.PI / 2;
+            leftNet.position.set(-halfW, h / 2, zPos + depth / 2);
+            goalGroup.add(leftNet);
+
+            const rightNet = new THREE.Mesh(sideNetGeo, netMat);
+            rightNet.rotation.y = Math.PI / 2;
+            rightNet.position.set(halfW, h / 2, zPos + depth / 2);
+            goalGroup.add(rightNet);
+
+            scene.add(goalGroup);
+        }
+
+        // 建立 3D 足球員模型
+        function createPlayerRig(jerseyColor, shortsColor) {
+            const group = new THREE.Group();
+            const skinMat = new THREE.MeshStandardMaterial({ color: 0xdba379, roughness: 0.6 });
+            const jerseyMat = new THREE.MeshStandardMaterial({ color: jerseyColor, roughness: 0.45 });
+            const shortsMat = new THREE.MeshStandardMaterial({ color: shortsColor, roughness: 0.55 });
+            const bootMat = new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.35 });
+
+            // 軀幹球衣
+            const torso = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.56, 0.25), jerseyMat);
+            torso.position.y = 1.08;
+            torso.castShadow = true;
+            group.add(torso);
+
+            // 球褲
+            const shorts = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.26, 0.24), shortsMat);
+            shorts.position.y = 0.7;
+            shorts.castShadow = true;
+            group.add(shorts);
+
+            // 頭部
+            const head = new THREE.Mesh(new THREE.SphereGeometry(0.16, 16, 16), skinMat);
+            head.position.y = 1.56;
+            head.castShadow = true;
+            group.add(head);
+
+            // 左右手臂
+            const armGeo = new THREE.BoxGeometry(0.11, 0.48, 0.11);
+            const leftArmPivot = new THREE.Group();
+            leftArmPivot.position.set(-0.31, 1.32, 0);
+            const leftArm = new THREE.Mesh(armGeo, skinMat);
+            leftArm.position.y = -0.2;
+            leftArmPivot.add(leftArm);
+            group.add(leftArmPivot);
+
+            const rightArmPivot = new THREE.Group();
+            rightArmPivot.position.set(0.31, 1.32, 0);
+            const rightArm = new THREE.Mesh(armGeo, skinMat);
+            rightArm.position.y = -0.2;
+            rightArmPivot.add(rightArm);
+            group.add(rightArmPivot);
+
+            // 左右腿與球鞋
+            const legGeo = new THREE.BoxGeometry(0.14, 0.54, 0.14);
+            const leftLegPivot = new THREE.Group();
+            leftLegPivot.position.set(-0.13, 0.58, 0);
+            const leftLeg = new THREE.Mesh(legGeo, skinMat);
+            leftLeg.position.y = -0.25;
+            const leftBoot = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.1, 0.26), bootMat);
+            leftBoot.position.set(0, -0.53, 0.05);
+            leftLegPivot.add(leftLeg, leftBoot);
+            group.add(leftLegPivot);
+
+            const rightLegPivot = new THREE.Group();
+            rightLegPivot.position.set(0.13, 0.58, 0);
+            const rightLeg = new THREE.Mesh(legGeo, skinMat);
+            rightLeg.position.y = -0.25;
+            const rightBoot = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.1, 0.26), bootMat);
+            rightBoot.position.set(0, -0.53, 0.05);
+            rightLegPivot.add(rightLeg, rightBoot);
+            group.add(rightLegPivot);
+
+            // 腳底方向箭頭光環
+            const ringGeo = new THREE.RingGeometry(0.38, 0.47, 32);
+            const ringMat = new THREE.MeshBasicMaterial({ color: jerseyColor, side: THREE.DoubleSide, transparent: true, opacity: 0.8 });
+            const floorRing = new THREE.Mesh(ringGeo, ringMat);
+            floorRing.rotation.x = -Math.PI / 2;
+            floorRing.position.y = 0.015;
+            group.add(floorRing);
+
+            const dirArrow = new THREE.Mesh(
+                new THREE.ConeGeometry(0.12, 0.24, 3),
+                new THREE.MeshBasicMaterial({ color: 0xffffff })
+            );
+            dirArrow.rotation.x = Math.PI / 2;
+            dirArrow.position.set(0, 0.02, 0.62);
+            group.add(dirArrow);
+
+            scene.add(group);
+            return { group, leftArmPivot, rightArmPivot, leftLegPivot, rightLegPivot, floorRing };
+        }
+
+        function initScene() {
+            const canvas = document.getElementById('game-canvas');
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x060b14);
+            scene.fog = new THREE.FogExp2(0x060b14, 0.014);
+
+            camera = new THREE.PerspectiveCamera(48, window.innerWidth / window.innerHeight, 0.1, 160);
+            camera.position.set(14, 11.5, 12);
+
+            renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+            // 夜間足球場探照燈照明
+            const ambient = new THREE.AmbientLight(0xdbeafe, 0.62);
+            scene.add(ambient);
+
+            const stadiumLight = new THREE.DirectionalLight(0xffffff, 1.1);
+            stadiumLight.position.set(12, 22, 10);
+            stadiumLight.castShadow = true;
+            stadiumLight.shadow.mapSize.width = 2048;
+            stadiumLight.shadow.mapSize.height = 2048;
+            const shadowBound = 18;
+            stadiumLight.shadow.camera.left = -shadowBound;
+            stadiumLight.shadow.camera.right = shadowBound;
+            stadiumLight.shadow.camera.top = shadowBound;
+            stadiumLight.shadow.camera.bottom = -shadowBound;
+            scene.add(stadiumLight);
+
+            // 1. 足球場草皮地板
+            const pitchGeo = new THREE.PlaneGeometry(PITCH.WIDTH + 2.8, PITCH.LENGTH + 2.8);
+            const pitchMat = new THREE.MeshStandardMaterial({
+                map: createPitchTexture(),
+                roughness: 0.78,
+                metalness: 0.02
+            });
+            const pitchMesh = new THREE.Mesh(pitchGeo, pitchMat);
+            pitchMesh.rotation.x = -Math.PI / 2;
+            pitchMesh.receiveShadow = true;
+            scene.add(pitchMesh);
+
+            // 2. 籠式球場四周低矮 LED 圍板 (防止球飛出界外，保持快節奏對戰)
+            const wallMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.4, metalness: 0.5 });
+            const sideWallGeo = new THREE.BoxGeometry(0.25, 0.55, PITCH.LENGTH + 2.2);
+            const leftWall = new THREE.Mesh(sideWallGeo, wallMat);
+            leftWall.position.set(-PITCH.WIDTH / 2 - 0.8, 0.275, 0);
+            const rightWall = new THREE.Mesh(sideWallGeo, wallMat);
+            rightWall.position.set(PITCH.WIDTH / 2 + 0.8, 0.275, 0);
+            scene.add(leftWall, rightWall);
+
+            // 3. 南北兩側標準 3D 球門
+            createGoalStructure(-PITCH.LENGTH / 2, -1); // 北側球門 (P1 進攻目標)
+            createGoalStructure(PITCH.LENGTH / 2, 1);   // 南側球門 (P2 進攻目標)
+
+            // 4. 球場四角探照燈柱裝飾
+            const towerMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.7 });
+            const lampMat = new THREE.MeshBasicMaterial({ color: 0xfef08a });
+            [[-10.5, -15], [10.5, -15], [-10.5, 15], [10.5, 15]].forEach(([tx, tz]) => {
+                const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.28, 9, 8), towerMat);
+                pole.position.set(tx, 4.5, tz);
+                const lampPanel = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.8, 0.3), lampMat);
+                lampPanel.position.set(tx, 9.1, tz);
+                lampPanel.lookAt(0, 0, 0);
+                scene.add(pole, lampPanel);
+            });
+
+            // 5. 3D 足球
+            const ballGeo = new THREE.SphereGeometry(PITCH.BALL_RADIUS, 28, 28);
+            const ballMat = new THREE.MeshStandardMaterial({
+                map: createSoccerBallTexture(),
+                roughness: 0.4
+            });
+            ballMesh = new THREE.Mesh(ballGeo, ballMat);
+            ballMesh.castShadow = true;
+            scene.add(ballMesh);
+
+            // 6. 建立兩位球員 (P1 紅隊 vs P2 藍隊)
+            p1Rig = createPlayerRig(0xef4444, 0x1e293b);
+            p2Rig = createPlayerRig(0x06b6d4, 0x0f172a);
+
+            resetKickoff('p1');
+        }
+
+        /**
+         * ============================================================================
+         * 4. 足球物理模擬與比賽規則 (SOCCER PHYSICS & GAMEPLAY)
+         * ============================================================================
+         */
+        function showGoalBanner(mainText, subText) {
+            const banner = document.getElementById('event-banner');
+            document.getElementById('event-banner-text').textContent = mainText;
+            document.getElementById('event-banner-sub').textContent = subText;
+            banner.classList.remove('hidden', 'goal-banner-anim');
+            void banner.offsetWidth;
+            banner.classList.add('goal-banner-anim');
+        }
+
+        function resetKickoff(kickoffTeam) {
+            GAME_STATE.ballOwner = null;
+            GAME_STATE.kickCooldown = 0;
+            GAME_STATE.resetTimer = 0;
+
+            ballState.pos.set(0, PITCH.BALL_RADIUS, 0);
+            ballState.vel.set(0, 0, 0);
+            ballState.targetPos.copy(ballState.pos);
+
+            // 開球方站在中圈球點後方，防守方退至己方半場
+            if (kickoffTeam === 'p1') {
+                players.p1.pos.set(0, 0, 0.9);
+                players.p1.rotY = Math.PI;
+                players.p2.pos.set(0, 0, -4.5);
+                players.p2.rotY = 0;
+            } else {
+                players.p2.pos.set(0, 0, -0.9);
+                players.p2.rotY = 0;
+                players.p1.pos.set(0, 0, 4.5);
+                players.p1.rotY = Math.PI;
+            }
+            players.p2.targetPos.copy(players.p2.pos);
+        }
+
+        // 執行起腳射門 / 傳球
+        function executeKick(shooterKey) {
+            const p = players[shooterKey];
+            const power = Math.max(0.22, p.chargeVal); // 0.22 ~ 1.0
+            p.isCharging = false;
+            p.chargeVal = 0;
+            p.kickAnimTimer = 0.28;
+
+            if (GAME_STATE.ballOwner !== shooterKey) return;
+
+            GAME_STATE.ballOwner = null;
+            GAME_STATE.kickCooldown = 0.28;
+
+            // 計算踢球水平方向 (結合球員朝向與微幅球門智能修正)
+            let dirX = Math.sin(p.rotY);
+            let dirZ = Math.cos(p.rotY);
+
+            const targetGoalZ = shooterKey === 'p1' ? -PITCH.LENGTH / 2 : PITCH.LENGTH / 2;
+            const toGoalX = 0 - p.pos.x;
+            const toGoalZ = targetGoalZ - p.pos.z;
+            const toGoalLen = Math.hypot(toGoalX, toGoalZ);
+            if (toGoalLen > 0.1) {
+                const gx = toGoalX / toGoalLen;
+                const gz = toGoalZ / toGoalLen;
+                const dot = dirX * gx + dirZ * gz;
+                // 若玩家大致朝向對方球門，給予 28% 射門角度輔助，提升手感
+                if (dot > 0.65) {
+                    dirX = dirX * 0.72 + gx * 0.28;
+                    dirZ = dirZ * 0.72 + gz * 0.28;
+                    const norm = Math.hypot(dirX, dirZ);
+                    dirX /= norm;
+                    dirZ /= norm;
+                }
+            }
+
+            const horizSpeed = 10.5 + power * 13.5; // 10.5 ~ 24 m/s
+            const loftSpeed = 1.4 + power * 6.2;    // 蓄力越高挑射弧度越高
+
+            ballState.vel.set(dirX * horizSpeed, loftSpeed, dirZ * horizSpeed);
+            AudioEngine.playKick(power);
+        }
+
+        // 無球狀態發動滑鏟搶斷
+        function triggerSlideTackle(defenderKey) {
+            const p = players[defenderKey];
+            if (p.slideTimer > 0 || p.slideCooldown > 0) return;
+            p.slideTimer = 0.36;
+            p.slideCooldown = 1.1;
+            AudioEngine.playKick(0.45);
+        }
+
+        function updatePhysics(dt) {
+            if (GAME_STATE.kickCooldown > 0) GAME_STATE.kickCooldown -= dt;
+
+            // 進球後慶祝緩衝倒數
+            if (GAME_STATE.resetTimer > 0) {
+                GAME_STATE.resetTimer -= dt;
+                if (GAME_STATE.resetTimer <= 0) {
+                    AudioEngine.playWhistle();
+                    resetKickoff(GAME_STATE.pendingKickoff);
+                }
+            } else if (GAME_STATE.gameTime > 0) {
+                GAME_STATE.gameTime = Math.max(0, GAME_STATE.gameTime - dt);
+                if (GAME_STATE.gameTime === 0) {
+                    AudioEngine.playWhistle();
+                    const resultText = GAME_STATE.scores.p1 > GAME_STATE.scores.p2 ? 'P1 紅隊獲勝！'
+                                     : GAME_STATE.scores.p2 > GAME_STATE.scores.p1 ? 'P2 藍隊獲勝！' : '雙方握手言和！';
+                    showGoalBanner('FULL TIME', resultText);
+                }
+            }
+
+            // 更新兩位球員移動、滑鏟與蓄力狀態
+            ['p1', 'p2'].forEach((key) => {
+                const p = players[key];
+                const inp = p.input;
+
+                if (p.slideCooldown > 0) p.slideCooldown -= dt;
+                if (p.kickAnimTimer > 0) p.kickAnimTimer -= dt;
+
+                if (GAME_STATE.mode === 'GUEST' && key === 'p2') {
+                    p.pos.lerp(p.targetPos, Math.min(1, dt * 18));
+                } else {
+                    if (p.slideTimer > 0) {
+                        // 滑鏟高速前衝期間
+                        p.slideTimer -= dt;
+                        const slideSpeed = 9.2;
+                        p.vel.x = Math.sin(p.rotY) * slideSpeed;
+                        p.vel.z = Math.cos(p.rotY) * slideSpeed;
+                    } else {
+                        const isSprinting = inp.sprint && p.stamina > 5 && (inp.x !== 0 || inp.z !== 0);
+                        const baseSpeed = GAME_STATE.ballOwner === key ? 4.8 : 5.3; // 無球跑動略快
+                        const speed = isSprinting ? baseSpeed * 1.42 : baseSpeed;
+
+                        if (isSprinting) {
+                            p.stamina = Math.max(0, p.stamina - 26 * dt);
+                        } else {
+                            p.stamina = Math.min(100, p.stamina + 18 * dt);
+                        }
+
+                        const len = Math.hypot(inp.x, inp.z);
+                        if (len > 0.05) {
+                            const nx = inp.x / Math.max(1, len);
+                            const nz = inp.z / Math.max(1, len);
+                            p.vel.x = nx * speed;
+                            p.vel.z = nz * speed;
+                            p.rotY = Math.atan2(nx, nz);
+                        } else {
+                            p.vel.x *= 0.8;
+                            p.vel.z *= 0.8;
+                        }
+                    }
+
+                    p.pos.x += p.vel.x * dt;
+                    p.pos.z += p.vel.z * dt;
+
+                    // 限制球員在球場圍板範圍內
+                    const maxX = PITCH.WIDTH / 2 + 0.4;
+                    const maxZ = PITCH.LENGTH / 2 + 0.6;
+                    p.pos.x = Math.max(-maxX, Math.min(maxX, p.pos.x));
+                    p.pos.z = Math.max(-maxZ, Math.min(maxZ, p.pos.z));
+                }
+
+                // 動作按鍵狀態機：持球則蓄力射門；無球則滑鏟搶斷
+                if (GAME_STATE.resetTimer <= 0) {
+                    if (GAME_STATE.ballOwner === key) {
+                        if (inp.actionDown) {
+                            p.isCharging = true;
+                            p.chargeVal = Math.min(1.0, p.chargeVal + dt * 1.35);
+                            if (p.chargeVal >= 1.0) {
+                                executeKick(key);
+                            }
+                        } else if (p.isCharging) {
+                            executeKick(key);
+                        }
+                    } else {
+                        p.isCharging = false;
+                        p.chargeVal = 0;
+                        if (inp.actionJustPressed) {
+                            triggerSlideTackle(key);
+                        }
+                    }
+                }
+                inp.actionJustPressed = false;
+            });
+
+            // 更新足球物理與碰撞
+            if (GAME_STATE.ballOwner) {
+                // 盤帶狀態：球跟隨在持球者腳前
+                const owner = players[GAME_STATE.ballOwner];
+                const dribbleDist = 0.48;
+                const targetBallX = owner.pos.x + Math.sin(owner.rotY) * dribbleDist;
+                const targetBallZ = owner.pos.z + Math.cos(owner.rotY) * dribbleDist;
+
+                ballState.pos.x += (targetBallX - ballState.pos.x) * Math.min(1, dt * 22);
+                ballState.pos.z += (targetBallZ - ballState.pos.z) * Math.min(1, dt * 22);
+                ballState.pos.y = PITCH.BALL_RADIUS;
+                ballState.vel.copy(owner.vel);
+
+                // 檢查對手滑鏟搶斷
+                const oppKey = GAME_STATE.ballOwner === 'p1' ? 'p2' : 'p1';
+                const opp = players[oppKey];
+                if (opp.slideTimer > 0 && opp.pos.distanceTo(ballState.pos) < 0.85) {
+                    GAME_STATE.ballOwner = null;
+                    GAME_STATE.kickCooldown = 0.35;
+                    ballState.vel.set(Math.sin(opp.rotY) * 8.5, 2.2, Math.cos(opp.rotY) * 8.5);
+                    AudioEngine.playKick(0.8);
+                }
+            } else {
+                // 自由滾動 / 空中飛行物理
+                ballState.vel.y += PITCH.GRAVITY * dt;
+                ballState.pos.addScaledVector(ballState.vel, dt);
+
+                // 草地反彈與滾動摩擦
+                if (ballState.pos.y <= PITCH.BALL_RADIUS) {
+                    ballState.pos.y = PITCH.BALL_RADIUS;
+                    if (Math.abs(ballState.vel.y) > 1.2) {
+                        AudioEngine.playKick(Math.min(0.6, Math.abs(ballState.vel.y) / 10));
+                    }
+                    ballState.vel.y = -ballState.vel.y * 0.58;
+                    ballState.vel.x *= Math.pow(PITCH.GRASS_FRICTION, dt * 60);
+                    ballState.vel.z *= Math.pow(PITCH.GRASS_FRICTION, dt * 60);
+                } else {
+                    // 空氣阻力
+                    ballState.vel.x *= 0.996;
+                    ballState.vel.z *= 0.996;
+                }
+
+                // 兩側圍板反彈
+                const wallX = PITCH.WIDTH / 2 + 0.55 - PITCH.BALL_RADIUS;
+                if (Math.abs(ballState.pos.x) > wallX) {
+                    ballState.pos.x = Math.sign(ballState.pos.x) * wallX;
+                    ballState.vel.x = -ballState.vel.x * 0.75;
+                    AudioEngine.playKick(0.4);
+                }
+
+                // 門柱與橫樑 3D 碰撞檢測 (南北兩側球門)
+                const halfGoalW = PITCH.GOAL_WIDTH / 2;
+                [-PITCH.LENGTH / 2, PITCH.LENGTH / 2].forEach((goalZ) => {
+                    // 左右兩根垂直門柱 (XZ 平面圓柱碰撞)
+                    if (ballState.pos.y <= PITCH.GOAL_HEIGHT + PITCH.BALL_RADIUS) {
+                        [-halfGoalW, halfGoalW].forEach((postX) => {
+                            const dx = ballState.pos.x - postX;
+                            const dz = ballState.pos.z - goalZ;
+                            const dist = Math.hypot(dx, dz);
+                            const minSep = PITCH.BALL_RADIUS + PITCH.POST_RADIUS;
+                            if (dist < minSep && dist > 0.0001) {
+                                const nx = dx / dist;
+                                const nz = dz / dist;
+                                ballState.pos.x = postX + nx * minSep;
+                                ballState.pos.z = goalZ + nz * minSep;
+                                const dot = ballState.vel.x * nx + ballState.vel.z * nz;
+                                if (dot < 0) {
+                                    ballState.vel.x -= 1.75 * dot * nx;
+                                    ballState.vel.z -= 1.75 * dot * nz;
+                                    AudioEngine.playPostHit();
+                                }
+                            }
+                        });
+                    }
+
+                    // 頂部水平橫樑 (YZ 平面圓柱碰撞)
+                    if (Math.abs(ballState.pos.x) <= halfGoalW + PITCH.BALL_RADIUS) {
+                        const dy = ballState.pos.y - PITCH.GOAL_HEIGHT;
+                        const dz = ballState.pos.z - goalZ;
+                        const dist = Math.hypot(dy, dz);
+                        const minSep = PITCH.BALL_RADIUS + PITCH.POST_RADIUS;
+                        if (dist < minSep && dist > 0.0001) {
+                            const ny = dy / dist;
+                            const nz = dz / dist;
+                            ballState.pos.y = PITCH.GOAL_HEIGHT + ny * minSep;
+                            ballState.pos.z = goalZ + nz * minSep;
+                            const dot = ballState.vel.y * ny + ballState.vel.z * nz;
+                            if (dot < 0) {
+                                ballState.vel.y -= 1.75 * dot * ny;
+                                ballState.vel.z -= 1.75 * dot * nz;
+                                AudioEngine.playPostHit();
+                            }
+                        }
+                    }
+                });
+
+                // 進球判定 (整顆球越過球門線且在門框範圍內)
+                if (GAME_STATE.resetTimer <= 0) {
+                    const inGoalWidth = Math.abs(ballState.pos.x) < (halfGoalW - PITCH.BALL_RADIUS * 0.4);
+                    const inGoalHeight = ballState.pos.y < (PITCH.GOAL_HEIGHT - PITCH.BALL_RADIUS * 0.3);
+
+                    if (inGoalWidth && inGoalHeight && ballState.pos.z < -PITCH.LENGTH / 2 - PITCH.BALL_RADIUS * 0.5) {
+                        // P1 攻破北側球門！
+                        GAME_STATE.scores.p1 += 1;
+                        GAME_STATE.pendingKickoff = 'p2';
+                        GAME_STATE.resetTimer = 2.1;
+                        AudioEngine.playGoalCheer();
+                        showGoalBanner('GOAL!! 1 : 0', 'P1 紅隊破門得分！');
+                        ballState.vel.multiplyScalar(0.25);
+                    } else if (inGoalWidth && inGoalHeight && ballState.pos.z > PITCH.LENGTH / 2 + PITCH.BALL_RADIUS * 0.5) {
+                        // P2 攻破南側球門！
+                        GAME_STATE.scores.p2 += 1;
+                        GAME_STATE.pendingKickoff = 'p1';
+                        GAME_STATE.resetTimer = 2.1;
+                        AudioEngine.playGoalCheer();
+                        showGoalBanner('GOAL!!', 'P2 藍隊破門得分！');
+                        ballState.vel.multiplyScalar(0.25);
+                    }
+                }
+
+                // 底線圍牆反彈 (球門兩側底線)
+                const endWallZ = PITCH.LENGTH / 2 + 0.85 - PITCH.BALL_RADIUS;
+                if (Math.abs(ballState.pos.z) > endWallZ) {
+                    ballState.pos.z = Math.sign(ballState.pos.z) * endWallZ;
+                    ballState.vel.z = -ballState.vel.z * 0.55;
+                }
+
+                // 球員停球 / 搶球判定
+                if (GAME_STATE.resetTimer <= 0 && GAME_STATE.kickCooldown <= 0 && ballState.pos.y < 0.85) {
+                    ['p1', 'p2'].forEach((key) => {
+                        if (GAME_STATE.ballOwner) return;
+                        const p = players[key];
+                        const dist = Math.hypot(p.pos.x - ballState.pos.x, p.pos.z - ballState.pos.z);
+                        if (dist < 0.65) {
+                            if (p.slideTimer > 0) {
+                                // 滑鏟直接將自由球鏟飛
+                                ballState.vel.set(Math.sin(p.rotY) * 10, 2.5, Math.cos(p.rotY) * 10);
+                                GAME_STATE.kickCooldown = 0.25;
+                                AudioEngine.playKick(0.75);
+                            } else {
+                                GAME_STATE.ballOwner = key;
+                            }
+                        }
+                    });
+                }
+            }
+        }
+
+        // 更新 3D 球體滾動與球員肢體動畫
+        function updateVisualRigs(dt) {
+            ballMesh.position.copy(ballState.pos);
+            // 依據球速旋轉足球紋理
+            ballMesh.rotation.x += ballState.vel.z * dt * 2.8;
+            ballMesh.rotation.z -= ballState.vel.x * dt * 2.8;
+
+            ['p1', 'p2'].forEach((key) => {
+                const p = players[key];
+                const rig = key === 'p1' ? p1Rig : p2Rig;
+
+                rig.group.position.set(p.pos.x, 0, p.pos.z);
+                rig.group.rotation.y = p.rotY;
+
+                // 滑鏟傾斜姿勢
+                if (p.slideTimer > 0) {
+                    rig.group.rotation.x = -0.85;
+                    rig.group.position.y = -0.25;
+                } else {
+                    rig.group.rotation.x = 0;
+                    rig.group.position.y = 0;
+                }
+
+                // 跑步與起腳射門腿部動畫
+                const speed = Math.hypot(p.vel.x, p.vel.z);
+                if (p.kickAnimTimer > 0) {
+                    rig.rightLegPivot.rotation.x = -1.25;
+                    rig.leftLegPivot.rotation.x = 0.3;
+                } else if (speed > 0.3 && p.slideTimer <= 0) {
+                    const stride = Math.sin(performance.now() * 0.015) * 0.72;
+                    rig.leftLegPivot.rotation.x = stride;
+                    rig.rightLegPivot.rotation.x = -stride;
+                    rig.leftArmPivot.rotation.x = -stride * 0.6;
+                    rig.rightArmPivot.rotation.x = stride * 0.6;
+                } else {
+                    rig.leftLegPivot.rotation.x *= 0.8;
+                    rig.rightLegPivot.rotation.x *= 0.8;
+                }
+
+                // 持球者腳底光環放大高亮
+                rig.floorRing.scale.setScalar(GAME_STATE.ballOwner === key ? 1.25 : 1.0);
+            });
+        }
+
+        /**
+         * ============================================================================
+         * 5. 單機智能 AI 對手與雙視角攝影機控制 (AI & CAMERA)
+         * ============================================================================
+         */
+        let camOrbitYaw = Math.PI / 2; // 預設從球場右側轉播俯瞰
+        let camOrbitPitch = 0.56;
+        let camOrbitDist = 17.5;
+        let isDraggingCam = false;
+        let lastPointerX = 0;
+        let lastPointerY = 0;
+
+        function updateSinglePlayerAI(dt) {
+            if (GAME_STATE.mode !== 'SOLO' || GAME_STATE.isConnected) return;
+            const ai = players.p2;
+            const inp = ai.input;
+
+            if (GAME_STATE.resetTimer > 0) {
+                inp.x = 0; inp.z = 0; inp.actionDown = false;
+                return;
+            }
+
+            if (GAME_STATE.ballOwner === 'p2') {
+                // AI 持球進攻：向南側球門 (Z = +13) 推進並尋找射門角度
+                const targetX = Math.sin(performance.now() * 0.0012) * 2.2;
+                const targetZ = 8.2;
+                const dx = targetX - ai.pos.x;
+                const dz = targetZ - ai.pos.z;
+                const dist = Math.hypot(dx, dz);
+
+                if (ai.pos.z > 6.8 && Math.abs(ai.pos.x) < 3.8) {
+                    // 進入射程，轉向球門並蓄力起腳
+                    inp.x = (0 - ai.pos.x) * 0.2;
+                    inp.z = 1;
+                    inp.actionDown = true;
+                    if (ai.chargeVal >= 0.62) {
+                        inp.actionDown = false; // 釋放射門
+                    }
+                } else {
+                    inp.actionDown = false;
+                    inp.x = dx / Math.max(0.1, dist);
+                    inp.z = dz / Math.max(0.1, dist);
+                    inp.sprint = dist > 3.5;
+                }
+            } else {
+                // AI 無球狀態：追擊足球或回防球門線前
+                inp.actionDown = false;
+                const targetX = ballState.pos.x * 0.85;
+                const targetZ = Math.min(ballState.pos.z - 0.3, 10.5);
+                const dx = targetX - ai.pos.x;
+                const dz = targetZ - ai.pos.z;
+                const dist = Math.hypot(dx, dz);
+
+                if (dist > 0.25) {
+                    inp.x = dx / dist;
+                    inp.z = dz / dist;
+                    inp.sprint = dist > 3.0;
+                } else {
+                    inp.x = 0; inp.z = 0;
+                }
+
+                // 若距離持球的 P1 夠近，發動滑鏟搶斷
+                if (GAME_STATE.ballOwner === 'p1' && dist < 1.35 && ai.slideCooldown <= 0) {
+                    inp.actionJustPressed = true;
+                }
+            }
+        }
+
+        function updateCamera(dt) {
+            if (GAME_STATE.camMode === 'FOLLOW') {
+                // 追尾視角：跟隨本地玩家身後望向進攻球門
+                const localKey = GAME_STATE.mode === 'GUEST' ? 'p2' : 'p1';
+                const p = players[localKey];
+                const backSign = localKey === 'p1' ? 1 : -1;
+                const desiredPos = new THREE.Vector3(p.pos.x * 0.75, 5.2, p.pos.z + backSign * 6.8);
+                camera.position.lerp(desiredPos, Math.min(1, dt * 6.5));
+                camera.lookAt(ballState.pos.x * 0.6, 0.8, ballState.pos.z - backSign * 3.5);
+            } else {
+                // 電視轉播側視角：焦點平滑追蹤足球
+                const focusX = ballState.pos.x * 0.35;
+                const focusZ = Math.max(-7.5, Math.min(7.5, ballState.pos.z * 0.68));
+                const desiredX = focusX + Math.sin(camOrbitYaw) * Math.cos(camOrbitPitch) * camOrbitDist;
+                const desiredY = Math.sin(camOrbitPitch) * camOrbitDist;
+                const desiredZ = focusZ + Math.cos(camOrbitYaw) * Math.cos(camOrbitPitch) * camOrbitDist;
+
+                camera.position.lerp(new THREE.Vector3(desiredX, Math.max(2.5, desiredY), desiredZ), Math.min(1, dt * 6.5));
+                camera.lookAt(focusX, 0.5, focusZ);
+            }
+        }
+
+        // 鍵盤、滑鼠拖曳與手機觸控控制綁定
+        const keysDown = {};
+        function setupControls() {
+            const getLocalPlayer = () => (GAME_STATE.mode === 'GUEST' ? players.p2 : players.p1);
+
+            window.addEventListener('keydown', (e) => {
+                AudioEngine.init();
+                keysDown[e.code] = true;
+                const p = getLocalPlayer();
+                if (e.code === 'Space' && !e.repeat) {
+                    p.input.actionDown = true;
+                    p.input.actionJustPressed = true;
+                }
+                syncLocalDirection();
+            });
+
+            window.addEventListener('keyup', (e) => {
+                keysDown[e.code] = false;
+                const p = getLocalPlayer();
+                if (e.code === 'Space') {
+                    p.input.actionDown = false;
+                }
+                syncLocalDirection();
+            });
+
+            function syncLocalDirection() {
+                const p = getLocalPlayer();
+                let rawX = 0, rawZ = 0;
+                if (keysDown['KeyA'] || keysDown['ArrowLeft']) rawX -= 1;
+                if (keysDown['KeyD'] || keysDown['ArrowRight']) rawX += 1;
+                if (keysDown['KeyW'] || keysDown['ArrowUp']) rawZ -= 1;
+                if (keysDown['KeyS'] || keysDown['ArrowDown']) rawZ += 1;
+
+                // 依據目前攝影機方位角自動轉換操作方向，確保上下左右永遠符合視覺直覺
+                if (GAME_STATE.camMode === 'BROADCAST') {
+                    const camForwardX = -Math.sin(camOrbitYaw);
+                    const camForwardZ = -Math.cos(camOrbitYaw);
+                    const camRightX = Math.cos(camOrbitYaw);
+                    const camRightZ = -Math.sin(camOrbitYaw);
+                    p.input.x = rawX * camRightX + (-rawZ) * camForwardX;
+                    p.input.z = rawX * camRightZ + (-rawZ) * camForwardZ;
+                } else {
+                    const flip = GAME_STATE.mode === 'GUEST' ? -1 : 1;
+                    p.input.x = rawX * flip;
+                    p.input.z = rawZ * flip;
+                }
+                p.input.sprint = !!(keysDown['ShiftLeft'] || keysDown['ShiftRight']);
+            }
+
+            // 滑鼠拖曳旋轉視角
+            const canvas = document.getElementById('game-canvas');
+            canvas.addEventListener('mousedown', (e) => {
+                AudioEngine.init();
+                isDraggingCam = true;
+                lastPointerX = e.clientX;
+                lastPointerY = e.clientY;
+            });
+            window.addEventListener('mouseup', () => { isDraggingCam = false; });
+            window.addEventListener('mousemove', (e) => {
+                if (!isDraggingCam) return;
+                const dx = e.clientX - lastPointerX;
+                const dy = e.clientY - lastPointerY;
+                lastPointerX = e.clientX;
+                lastPointerY = e.clientY;
+                camOrbitYaw -= dx * 0.006;
+                camOrbitPitch = Math.max(0.22, Math.min(1.2, camOrbitPitch + dy * 0.005));
+            });
+
+            // 行動端虛擬搖桿
+            const joyZone = document.getElementById('joystick-zone');
+            const joyKnob = document.getElementById('joystick-knob');
+            let joyTouchId = null;
+
+            joyZone.addEventListener('touchstart', (e) => {
+                AudioEngine.init();
+                e.preventDefault();
+                joyTouchId = e.changedTouches[0].identifier;
+                updateJoystick(e.changedTouches[0]);
+            }, { passive: false });
+
+            joyZone.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+                for (let t of e.changedTouches) {
+                    if (t.identifier === joyTouchId) updateJoystick(t);
+                }
+            }, { passive: false });
+
+            const releaseJoystick = (e) => {
+                for (let t of e.changedTouches) {
+                    if (t.identifier === joyTouchId) {
+                        joyTouchId = null;
+                        joyKnob.style.transform = 'translate(0px, 0px)';
+                        const p = getLocalPlayer();
+                        p.input.x = 0;
+                        p.input.z = 0;
+                    }
+                }
+            };
+            joyZone.addEventListener('touchend', releaseJoystick);
+            joyZone.addEventListener('touchcancel', releaseJoystick);
+
+            function updateJoystick(touch) {
+                const rect = joyZone.getBoundingClientRect();
+                const cx = rect.left + rect.width / 2;
+                const cy = rect.top + rect.height / 2;
+                const maxR = rect.width * 0.36;
+                let dx = touch.clientX - cx;
+                let dy = touch.clientY - cy;
+                const dist = Math.hypot(dx, dy);
+                if (dist > maxR) {
+                    dx = (dx / dist) * maxR;
+                    dy = (dy / dist) * maxR;
+                }
+                joyKnob.style.transform = `translate(${dx}px, ${dy}px)`;
+                const rawX = dx / maxR;
+                const rawZ = dy / maxR;
+                const p = getLocalPlayer();
+
+                if (GAME_STATE.camMode === 'BROADCAST') {
+                    const camForwardX = -Math.sin(camOrbitYaw);
+                    const camForwardZ = -Math.cos(camOrbitYaw);
+                    const camRightX = Math.cos(camOrbitYaw);
+                    const camRightZ = -Math.sin(camOrbitYaw);
+                    p.input.x = rawX * camRightX + (-rawZ) * camForwardX;
+                    p.input.z = rawX * camRightZ + (-rawZ) * camForwardZ;
+                } else {
+                    const flip = GAME_STATE.mode === 'GUEST' ? -1 : 1;
+                    p.input.x = rawX * flip;
+                    p.input.z = rawZ * flip;
+                }
+            }
+
+            // 行動端射門與衝刺按鈕
+            const touchActionBtn = document.getElementById('btn-touch-action');
+            touchActionBtn.addEventListener('touchstart', (e) => {
+                AudioEngine.init();
+                e.preventDefault();
+                const p = getLocalPlayer();
+                p.input.actionDown = true;
+                p.input.actionJustPressed = true;
+            }, { passive: false });
+            touchActionBtn.addEventListener('touchend', (e) => {
+                e.preventDefault();
+                getLocalPlayer().input.actionDown = false;
+            }, { passive: false });
+
+            const touchSprintBtn = document.getElementById('btn-touch-sprint');
+            touchSprintBtn.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                getLocalPlayer().input.sprint = true;
+            }, { passive: false });
+            touchSprintBtn.addEventListener('touchend', (e) => {
+                e.preventDefault();
+                getLocalPlayer().input.sprint = false;
+            }, { passive: false });
+        }
+
+        /**
+         * ============================================================================
+         * 6. 無伺服器 WEBRTC IP P2P 連線模組 (SERVERLESS WEBRTC IP P2P)
+         * ============================================================================
+         */
+        let peerConn = null;
+        let dataChannel = null;
+        let syncInterval = null;
+        let pingInterval = null;
+        let lastPingSentAt = 0;
+
+        const ICE_CONFIG = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
+            ]
+        };
+
+        // 從 SDP 中擷取 IPv4 位址 (區域網路 IP 與 STUN 公網 IP)
+        function extractIPsFromSDP(sdpText) {
+            const ipRegex = /\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b/g;
+            const matches = sdpText.match(ipRegex) || [];
+            return [...new Set(matches)].filter(ip => ip !== '0.0.0.0' && !ip.startsWith('127.'));
+        }
+
+        async function detectLocalIPs() {
+            const displayEl = document.getElementById('local-ip-display');
+            displayEl.textContent = '正在透過 WebRTC ICE 探測 IP...';
+            try {
+                const tempPc = new RTCPeerConnection(ICE_CONFIG);
+                tempPc.createDataChannel('ip-probe');
+                const offer = await tempPc.createOffer();
+                await tempPc.setLocalDescription(offer);
+
+                await new Promise((resolve) => {
+                    const timer = setTimeout(resolve, 1800);
+                    tempPc.onicecandidate = (e) => {
+                        if (!e.candidate) {
+                            clearTimeout(timer);
+                            resolve();
+                        }
+                    };
+                });
+
+                const ips = extractIPsFromSDP(tempPc.localDescription.sdp);
+                tempPc.close();
+
+                displayEl.textContent = ips.length > 0
+                    ? ips.join('  |  ')
+                    : '已啟用 mDNS 隱私保護 — 可直接產生邀請碼建立 P2P 連線';
+            } catch (err) {
+                displayEl.textContent = '請直接點擊產生邀請碼進行 P2P 連線';
+            }
+        }
+
+        function waitForIceGathering(pc, timeoutMs = 2200) {
+            return new Promise((resolve) => {
+                if (pc.iceGatheringState === 'complete') {
+                    resolve();
+                    return;
+                }
+                const timer = setTimeout(resolve, timeoutMs);
+                pc.onicegatheringstatechange = () => {
+                    if (pc.iceGatheringState === 'complete') {
+                        clearTimeout(timer);
+                        resolve();
+                    }
+                };
+            });
+        }
+
+        function encodeSignalToken(desc) {
+            const payload = JSON.stringify({ t: desc.type, s: desc.sdp });
+            return btoa(unescape(encodeURIComponent(payload)));
+        }
+
+        function decodeSignalToken(token) {
+            const jsonStr = decodeURIComponent(escape(atob(token.trim())));
+            const obj = JSON.parse(jsonStr);
+            return new RTCSessionDescription({ type: obj.t, sdp: obj.s });
+        }
+
+        function setupDataChannelHandlers(channel, role) {
+            dataChannel = channel;
+            dataChannel.onopen = () => {
+                GAME_STATE.mode = role;
+                GAME_STATE.isConnected = true;
+
+                const remoteIPs = extractIPsFromSDP(peerConn.remoteDescription.sdp);
+                const ipLabel = remoteIPs.length > 0 ? remoteIPs[0] : 'P2P 直連通道';
+
+                document.getElementById('conn-dot').className = 'w-2.5 h-2.5 rounded-full bg-emerald-400';
+                document.getElementById('conn-status-label').textContent = role === 'HOST' ? 'P1 房主 (已連線)' : 'P2 客端 (已連線)';
+                document.getElementById('p2p-telemetry-bar').classList.remove('hidden');
+                document.getElementById('peer-ip-badge').textContent = `對方 IP: ${ipLabel}`;
+                document.getElementById('lobby-modal').classList.add('hidden');
+
+                GAME_STATE.scores = { p1: 0, p2: 0 };
+                GAME_STATE.gameTime = 180;
+                resetKickoff('p1');
+                showToast(`⚽ P2P 足球連線成功！直連 IP: ${ipLabel}`);
+
+                clearInterval(syncInterval);
+                clearInterval(pingInterval);
+
+                // 30Hz 狀態與輸入同步
+                syncInterval = setInterval(() => {
+                    if (!dataChannel || dataChannel.readyState !== 'open') return;
+                    if (GAME_STATE.mode === 'HOST') {
+                        const snapshot = {
+                            k: 'state',
+                            b: [ballState.pos.x, ballState.pos.y, ballState.pos.z, ballState.vel.x, ballState.vel.y, ballState.vel.z],
+                            p1: [players.p1.pos.x, players.p1.pos.z, players.p1.rotY, players.p1.slideTimer > 0 ? 1 : 0],
+                            p2: [players.p2.pos.x, players.p2.pos.z, players.p2.rotY, players.p2.slideTimer > 0 ? 1 : 0],
+                            sc: [GAME_STATE.scores.p1, GAME_STATE.scores.p2],
+                            tm: Math.ceil(GAME_STATE.gameTime),
+                            own: GAME_STATE.ballOwner
+                        };
+                        dataChannel.send(JSON.stringify(snapshot));
+                    } else if (GAME_STATE.mode === 'GUEST') {
+                        const inp = players.p2.input;
+                        const packet = {
+                            k: 'input',
+                            x: Number(inp.x.toFixed(2)),
+                            z: Number(inp.z.toFixed(2)),
+                            sp: inp.sprint ? 1 : 0,
+                            ad: inp.actionDown ? 1 : 0
+                        };
+                        dataChannel.send(JSON.stringify(packet));
+                    }
+                }, 33);
+
+                // Ping 延遲測量
+                pingInterval = setInterval(() => {
+                    if (dataChannel && dataChannel.readyState === 'open') {
+                        lastPingSentAt = performance.now();
+                        dataChannel.send(JSON.stringify({ k: 'ping' }));
+                    }
+                }, 1000);
+            };
+
+            dataChannel.onmessage = (e) => {
+                try {
+                    const msg = JSON.parse(e.data);
+                    if (msg.k === 'ping') {
+                        dataChannel.send(JSON.stringify({ k: 'pong' }));
+                    } else if (msg.k === 'pong') {
+                        const rtt = Math.round(performance.now() - lastPingSentAt);
+                        document.getElementById('ping-badge').textContent = `Ping: ${rtt} ms`;
+                    } else if (msg.k === 'input' && GAME_STATE.mode === 'HOST') {
+                        const prevDown = players.p2.input.actionDown;
+                        players.p2.input.x = msg.x;
+                        players.p2.input.z = msg.z;
+                        players.p2.input.sprint = !!msg.sp;
+                        players.p2.input.actionDown = !!msg.ad;
+                        if (msg.ad && !prevDown) {
+                            players.p2.input.actionJustPressed = true;
+                        }
+                    } else if (msg.k === 'state' && GAME_STATE.mode === 'GUEST') {
+                        ballState.targetPos.set(msg.b[0], msg.b[1], msg.b[2]);
+                        ballState.vel.set(msg.b[3], msg.b[4], msg.b[5]);
+
+                        players.p1.pos.set(msg.p1[0], 0, msg.p1[1]);
+                        players.p1.rotY = msg.p1[2];
+                        players.p1.slideTimer = msg.p1[3] ? 0.1 : 0;
+
+                        players.p2.targetPos.set(msg.p2[0], 0, msg.p2[1]);
+                        players.p2.rotY = msg.p2[2];
+                        players.p2.slideTimer = msg.p2[3] ? 0.1 : 0;
+
+                        GAME_STATE.scores.p1 = msg.sc[0];
+                        GAME_STATE.scores.p2 = msg.sc[1];
+                        GAME_STATE.gameTime = msg.tm;
+                        GAME_STATE.ballOwner = msg.own;
+                    }
+                } catch (err) {
+                    console.warn('Packet error:', err);
+                }
+            };
+
+            dataChannel.onclose = () => {
+                GAME_STATE.isConnected = false;
+                GAME_STATE.mode = 'SOLO';
+                document.getElementById('conn-dot').className = 'w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse';
+                document.getElementById('conn-status-label').textContent = '連線中斷 (單機 AI)';
+                document.getElementById('p2p-telemetry-bar').classList.add('hidden');
+                showToast('⚠️ P2P 連線已中斷，已切回單機 AI 模式');
+            };
+        }
+
+        async function createHostOffer() {
+            const btn = document.getElementById('btn-create-offer');
+            btn.textContent = '封裝 IP 中...';
+            btn.disabled = true;
+            try {
+                if (peerConn) peerConn.close();
+                peerConn = new RTCPeerConnection(ICE_CONFIG);
+                const dc = peerConn.createDataChannel('soccer-p2p', { ordered: false, maxRetransmits: 0 });
+                setupDataChannelHandlers(dc, 'HOST');
+
+                const offer = await peerConn.createOffer();
+                await peerConn.setLocalDescription(offer);
+                await waitForIceGathering(peerConn);
+
+                document.getElementById('host-offer-output').value = encodeSignalToken(peerConn.localDescription);
+                showToast('✅ 已產生包含您 IP 的邀請碼，請複製傳給好友！');
+            } catch (err) {
+                showToast('❌ 產生邀請碼失敗：' + err.message);
+            } finally {
+                btn.textContent = '產生邀請碼';
+                btn.disabled = false;
+            }
+        }
+
+        async function createGuestAnswer() {
+            const offerToken = document.getElementById('guest-offer-input').value.trim();
+            if (!offerToken) {
+                showToast('⚠️ 請先貼上房主的邀請碼！');
+                return;
+            }
+            const btn = document.getElementById('btn-create-answer');
+            btn.textContent = '解析 IP 與產生回應中...';
+            btn.disabled = true;
+            try {
+                if (peerConn) peerConn.close();
+                peerConn = new RTCPeerConnection(ICE_CONFIG);
+                peerConn.ondatachannel = (e) => setupDataChannelHandlers(e.channel, 'GUEST');
+
+                const remoteDesc = decodeSignalToken(offerToken);
+                const hostIPs = extractIPsFromSDP(remoteDesc.sdp);
+                document.getElementById('parsed-host-ip').textContent =
+                    hostIPs.length > 0 ? `偵測到房主 IP: ${hostIPs[0]}` : '已解析房主連線資訊';
+
+                await peerConn.setRemoteDescription(remoteDesc);
+                const answer = await peerConn.createAnswer();
+                await peerConn.setLocalDescription(answer);
+                await waitForIceGathering(peerConn);
+
+                document.getElementById('guest-answer-output').value = encodeSignalToken(peerConn.localDescription);
+                showToast('✅ 回應碼已產生！請複製傳回給房主');
+            } catch (err) {
+                showToast('❌ 邀請碼格式錯誤，請確認完整複製');
+            } finally {
+                btn.textContent = '解析房主 IP 並產生我的回應碼';
+                btn.disabled = false;
+            }
+        }
+
+        async function acceptGuestAnswer() {
+            const answerToken = document.getElementById('host-answer-input').value.trim();
+            if (!peerConn || !answerToken) {
+                showToast('⚠️ 請先產生邀請碼並貼上好友的回應碼！');
+                return;
+            }
+            try {
+                await peerConn.setRemoteDescription(decodeSignalToken(answerToken));
+                showToast('⏳ 正在建立 UDP P2P 通道...');
+            } catch (err) {
+                showToast('❌ 回應碼無效，請確認完整貼上');
+            }
+        }
+
+        /**
+         * ============================================================================
+         * 7. UI 互動與主渲染迴圈 (UI & MAIN LOOP)
+         * ============================================================================
+         */
+        let toastTimer = null;
+        function showToast(text) {
+            const box = document.getElementById('toast-box');
+            document.getElementById('toast-msg').textContent = text;
+            box.classList.remove('opacity-0', '-translate-y-2');
+            clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => {
+                box.classList.add('opacity-0', '-translate-y-2');
+            }, 3200);
+        }
+
+        function copyFromTextarea(textareaId, successText) {
+            const el = document.getElementById(textareaId);
+            if (!el.value) {
+                showToast('⚠️ 欄位目前為空，無內容可複製');
+                return;
+            }
+            el.select();
+            el.setSelectionRange(0, 99999);
+            try {
+                document.execCommand('copy');
+                showToast(successText);
+            } catch (err) {
+                showToast('⚠️ 請手動全選複製');
+            }
+        }
+
+        function updateHUD() {
+            document.getElementById('score-p1').textContent = GAME_STATE.scores.p1;
+            document.getElementById('score-p2').textContent = GAME_STATE.scores.p2;
+
+            const mins = Math.floor(GAME_STATE.gameTime / 60);
+            const secs = Math.floor(GAME_STATE.gameTime % 60);
+            document.getElementById('game-clock').textContent =
+                `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+
+            // 射門蓄力條顯示
+            const localP = GAME_STATE.mode === 'GUEST' ? players.p2 : players.p1;
+            const meterBox = document.getElementById('shot-meter-container');
+            const meterFill = document.getElementById('shot-meter-fill');
+            if (localP.isCharging) {
+                meterBox.classList.remove('hidden');
+                meterFill.style.width = `${Math.min(100, localP.chargeVal * 100)}%`;
+            } else {
+                meterBox.classList.add('hidden');
+            }
+
+            // 行動端按鈕隨持球狀態切換文字
+            const localKey = GAME_STATE.mode === 'GUEST' ? 'p2' : 'p1';
+            const touchLabel = document.getElementById('touch-action-label');
+            if (touchLabel) {
+                touchLabel.textContent = GAME_STATE.ballOwner === localKey ? '射門' : '滑鏟';
+            }
+        }
+
+        function bindUIEvents() {
+            document.getElementById('btn-open-lobby').onclick = () => document.getElementById('lobby-modal').classList.remove('hidden');
+            document.getElementById('btn-close-lobby').onclick = () => document.getElementById('lobby-modal').classList.add('hidden');
+            document.getElementById('btn-open-arch').onclick = () => document.getElementById('arch-modal').classList.remove('hidden');
+            document.getElementById('btn-close-arch').onclick = () => document.getElementById('arch-modal').classList.add('hidden');
+
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.onclick = () => {
+                    document.querySelectorAll('.tab-btn').forEach(b => {
+                        b.classList.remove('bg-emerald-600', 'text-white');
+                        b.classList.add('text-slate-400');
+                    });
+                    btn.classList.add('bg-emerald-600', 'text-white');
+                    btn.classList.remove('text-slate-400');
+
+                    document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
+                    document.getElementById(`tab-${btn.dataset.tab}`).classList.remove('hidden');
+                };
+            });
+
+            document.getElementById('btn-start-solo').onclick = () => {
+                AudioEngine.init();
+                document.getElementById('lobby-modal').classList.add('hidden');
+                showToast('⚽ 比賽開始！控制 P1 紅隊進攻上方球門');
+            };
+            document.getElementById('btn-reset-match').onclick = () => {
+                GAME_STATE.scores = { p1: 0, p2: 0 };
+                GAME_STATE.gameTime = 180;
+                resetKickoff('p1');
+                showToast('🔄 比分與時間已重置');
+            };
+
+            document.getElementById('btn-refresh-ip').onclick = detectLocalIPs;
+            document.getElementById('btn-create-offer').onclick = createHostOffer;
+            document.getElementById('btn-copy-offer').onclick = () => copyFromTextarea('host-offer-output', '📋 已複製邀請碼！請傳送給 P2 好友');
+            document.getElementById('btn-create-answer').onclick = createGuestAnswer;
+            document.getElementById('btn-copy-answer').onclick = () => copyFromTextarea('guest-answer-output', '📋 已複製回應碼！請傳回給房主');
+            document.getElementById('btn-accept-answer').onclick = acceptGuestAnswer;
+
+            document.getElementById('btn-toggle-cam').onclick = (e) => {
+                GAME_STATE.camMode = GAME_STATE.camMode === 'BROADCAST' ? 'FOLLOW' : 'BROADCAST';
+                e.currentTarget.textContent = GAME_STATE.camMode === 'BROADCAST' ? '🎥 轉播視角' : '🎥 追尾視角';
+                showToast(GAME_STATE.camMode === 'BROADCAST' ? '🎥 已切換為電視轉播側視角' : '🎥 已切換為球員追尾視角');
+            };
+
+            document.getElementById('btn-toggle-audio').onclick = (e) => {
+                AudioEngine.init();
+                AudioEngine.muted = !AudioEngine.muted;
+                e.currentTarget.textContent = AudioEngine.muted ? '🔇' : '🔊';
+                showToast(AudioEngine.muted ? '🔇 音效已靜音' : '🔊 音效已開啟');
+            };
+
+            window.addEventListener('resize', () => {
+                if (!camera || !renderer) return;
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const dt = Math.min(0.05, clock.getDelta());
+
+            if (GAME_STATE.mode !== 'GUEST') {
+                updateSinglePlayerAI(dt);
+                updatePhysics(dt);
+            } else {
+                // 客端插值平滑更新球與玩家位置
+                ballState.pos.lerp(ballState.targetPos, Math.min(1, dt * 20));
+                players.p2.pos.lerp(players.p2.targetPos, Math.min(1, dt * 18));
+            }
+
+            updateVisualRigs(dt);
+            updateCamera(dt);
+            updateHUD();
+
+            renderer.render(scene, camera);
+        }
+
+        window.onload = function () {
+            initScene();
+            setupControls();
+            bindUIEvents();
+            detectLocalIPs();
+            animate();
+        };
+    </script>
+</body>
+</html>
